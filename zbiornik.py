@@ -4,7 +4,7 @@ import re
 from streamlink.exceptions import PluginError
 from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import useragents, validate
-from streamlink.utils import parse_json
+from streamlink.utils.parse import parse_json
 
 log = logging.getLogger(__name__)
 

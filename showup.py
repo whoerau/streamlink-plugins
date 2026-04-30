@@ -6,7 +6,7 @@ import websocket
 from streamlink.exceptions import PluginError
 from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
-from streamlink.utils import parse_json
+from streamlink.utils.parse import parse_json
 
 SWF_URL = 'http://showup.tv/flash/suStreamer.swf'
 RANDOM_UID = '%032x' % random.getrandbits(128)

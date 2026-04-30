@@ -3,7 +3,7 @@ import uuid
 
 from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
-from streamlink.stream import HLSStream
+from streamlink.stream.hls import HLSStream
 
 API_HLS = "https://chaturbate.com/get_edge_hls_url_ajax/"
 
@@ -49,4 +49,3 @@ class Chaturbate(Plugin):
 
 
 __plugin__ = Chaturbate
-

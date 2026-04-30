@@ -2,7 +2,7 @@ import re
 
 from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
-from streamlink.stream import HLSStream
+from streamlink.stream.hls import HLSStream
 from datetime import datetime
 
 STREAM_INFO = "https://www.cam4.com/rest/v1.0/profile/{0}/streamInfo"

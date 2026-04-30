@@ -7,8 +7,8 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from streamlink.exceptions import PluginError, NoStreamsError
 from streamlink.plugin.api import validate, useragents
 from streamlink.plugin import Plugin, pluginmatcher
-from streamlink.stream import HLSStream
-from streamlink.utils import update_scheme
+from streamlink.stream.hls import HLSStream
+from streamlink.utils.url import update_scheme
 
 
 CONST_HEADERS = {}
@@ -96,4 +96,3 @@ class bongacams(Plugin):
 
 
 __plugin__ = bongacams
-

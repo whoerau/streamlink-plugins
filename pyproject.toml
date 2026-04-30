@@ -9,7 +9,7 @@ description = "Third-party Streamlink plugins packaged for pip installation."
 requires-python = ">=3.8"
 dependencies = [
     "requests",
-    "streamlink",
+    "streamlink>=8.3.0",
     "websocket-client",
 ]
 

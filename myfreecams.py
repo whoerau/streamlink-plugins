@@ -7,8 +7,9 @@ from urllib.parse import unquote
 from streamlink.exceptions import NoStreamsError, PluginError
 from streamlink.plugin import Plugin, PluginArgument, PluginArguments, pluginmatcher
 from streamlink.plugin.api import useragents, validate
-from streamlink.stream import DASHStream, HLSStream
-from streamlink.utils import parse_json
+from streamlink.stream.dash import DASHStream
+from streamlink.stream.hls import HLSStream
+from streamlink.utils.parse import parse_json
 
 from websocket import create_connection
 

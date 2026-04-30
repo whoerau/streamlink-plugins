@@ -3,7 +3,7 @@ import re
 from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
 from streamlink.plugin.api import useragents
-from streamlink.stream import HLSStream
+from streamlink.stream.hls import HLSStream
 
 _url_re = re.compile(r"http(s)?://(www\.)?camsoda\.com/(?P<username>[^\"\']+)")
 
