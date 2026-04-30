@@ -1,6 +1,6 @@
 import re
 
-from streamlink.plugin import Plugin
+from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
 from streamlink.stream import HLSStream
 from datetime import datetime
@@ -11,13 +11,10 @@ PROFILE_URL = "https://www.cam4.com/rest/v1.0/profile/{0}/info"
 
 _url_re = re.compile(r"https?://(\w+\.)?cam4\.com/(?P<username>\w+)")
 
+@pluginmatcher(_url_re)
 class Cam4(Plugin):
-    @classmethod
-    def can_handle_url(cls, url):
-        return _url_re.match(url)
-
     def _get_streams(self):
-        match = _url_re.match(self.url)
+        match = self.match
         username = match.group("username")
 
         res = self.session.http.get(INFO_URL.format(username))

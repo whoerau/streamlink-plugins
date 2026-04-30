@@ -3,9 +3,10 @@ import random
 import re
 import websocket
 
-from streamlink.plugin import Plugin
-from streamlink.plugin.api import validate, utils
-from streamlink.stream import RTMPStream
+from streamlink.exceptions import PluginError
+from streamlink.plugin import Plugin, pluginmatcher
+from streamlink.plugin.api import validate
+from streamlink.utils import parse_json
 
 SWF_URL = 'http://showup.tv/flash/suStreamer.swf'
 RANDOM_UID = '%032x' % random.getrandbits(128)
@@ -19,11 +20,8 @@ _schema = validate.Schema(validate.get('value'))
 log = logging.getLogger(__name__)
 
 
+@pluginmatcher(_url_re)
 class ShowUp(Plugin):
-    @classmethod
-    def can_handle_url(cls, url):
-        return _url_re.match(url)
-
     def _get_stream_id(self, channel, ws_url):
         ws = websocket.WebSocket()
         ws.connect(ws_url)
@@ -31,7 +29,7 @@ class ShowUp(Plugin):
         ws.send(JSON_CHANNEL % channel)
         # STREAM_ID
         result = ws.recv()
-        data = utils.parse_json(result, schema=_schema)
+        data = parse_json(result, schema=_schema)
         log.debug('DATA 1 {0}'.format(data))
         if 'failure' in data:
             ws.close()
@@ -39,7 +37,7 @@ class ShowUp(Plugin):
 
         # RTMP CDN
         result_2 = ws.recv()
-        data2 = utils.parse_json(result_2, schema=_schema)
+        data2 = parse_json(result_2, schema=_schema)
         log.debug('DATA 2 {0}'.format(data2))
         if 'failure' in data2:
             ws.close()
@@ -47,7 +45,7 @@ class ShowUp(Plugin):
 
         # ERROR
         result_3 = ws.recv()
-        data3 = utils.parse_json(result_3, schema=_schema)
+        data3 = parse_json(result_3, schema=_schema)
         log.debug('DATA 3 {0}'.format(data3))
         if 'failure' in data3:
             ws.close()
@@ -64,6 +62,7 @@ class ShowUp(Plugin):
             return 'wss://%s' % ws_host
 
     def _get_streams(self):
+        raise PluginError("RTMP streams are not supported by current Streamlink versions")
         log.debug('Version 2018-08-19')
         log.info('This is a custom plugin.')
         url_match = _url_re.match(self.url)

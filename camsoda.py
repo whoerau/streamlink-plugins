@@ -1,9 +1,6 @@
 import random
 import re
-import json
-
-from streamlink.plugin import Plugin
-from streamlink.plugin.api import http
+from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
 from streamlink.plugin.api import useragents
 from streamlink.stream import HLSStream
@@ -12,10 +9,10 @@ _url_re = re.compile(r"http(s)?://(www\.)?camsoda\.com/(?P<username>[^\"\']+)")
 
 _api_user_schema = validate.Schema(
     {
-        "status": validate.any(int, validate.text),
+        "status": validate.any(int, str),
         validate.optional("user"): validate.Schema({
             "chat": validate.Schema ({
-                    "status": validate.any(int, validate.text)
+                    "status": validate.any(int, str)
             })
         })
     }
@@ -23,13 +20,14 @@ _api_user_schema = validate.Schema(
 
 _api_video_schema = validate.Schema(
     {
-        "token": validate.text,
-        "edge_servers": [validate.text],
-        "stream_name": validate.text
+        "token": str,
+        "edge_servers": [str],
+        "stream_name": str
     }
 )
 
 
+@pluginmatcher(_url_re)
 class Camsoda(Plugin):
     API_URL_VIDEO = "https://www.camsoda.com/api/v1/video/vtoken/{0}?username=guest_{1}"
     HLS_URL_VIDEO_EDGE = "https://{server}/{stream_name}_v1/index.m3u8?token={token}"
@@ -37,10 +35,6 @@ class Camsoda(Plugin):
     headers = {
         "User-Agent": useragents.FIREFOX
     }
-
-    @classmethod
-    def can_handle_url(cls, url):
-        return _url_re.match(url)
 
     def _stream_status(self, data_user):
 
@@ -57,12 +51,16 @@ class Camsoda(Plugin):
         return True
 
     def _get_api_video(self, username):
-        res = http.get(self.API_URL_VIDEO.format(username, str(random.randint(1000, 99999))), headers=self.headers, verify=False)
-        data_video = http.json(res, schema=_api_video_schema)
+        res = self.session.http.get(
+            self.API_URL_VIDEO.format(username, str(random.randint(1000, 99999))),
+            headers=self.headers,
+            verify=False,
+        )
+        data_video = self.session.http.json(res, schema=_api_video_schema)
         return data_video
 
     def _get_streams(self):
-        match = _url_re.match(self.url)
+        match = self.match
         username = match.group("username")
         username = username.replace("/", "")
 

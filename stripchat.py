@@ -1,6 +1,6 @@
 import re
 
-from streamlink.plugin import Plugin
+from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
 from streamlink.stream import HLSStream
 
@@ -9,12 +9,12 @@ _url_re = re.compile(r"https?://(\w+\.)?stripchat\.com/(?P<username>[a-zA-Z0-9_-
 _post_schema = validate.Schema(
     {
         "cam": validate.Schema({
-                    'streamName' : validate.text,
-                    'viewServers': validate.Schema({'flashphoner-hls': validate.text})
+                    'streamName' : str,
+                    'viewServers': validate.Schema({'flashphoner-hls': str})
         }),
         "user": validate.Schema({
                     'user' : validate.Schema({
-                                'status' : validate.text,
+                                'status' : str,
                                 'isLive' : bool
                     })
         })    
@@ -22,13 +22,10 @@ _post_schema = validate.Schema(
 )
 
 
+@pluginmatcher(_url_re)
 class Stripchat(Plugin):
-    @classmethod
-    def can_handle_url(cls, url):
-        return _url_re.match(url)
-
     def _get_streams(self):
-        match = _url_re.match(self.url)
+        match = self.match
         username = match.group("username")
         api_call = "https://stripchat.com/api/front/v2/models/username/{0}/cam".format(username)
         headers = {

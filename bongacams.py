@@ -6,7 +6,7 @@ import requests
 from urllib.parse import urljoin, urlparse, urlunparse
 from streamlink.exceptions import PluginError, NoStreamsError
 from streamlink.plugin.api import validate, useragents
-from streamlink.plugin import Plugin
+from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.stream import HLSStream
 from streamlink.utils import update_scheme
 
@@ -22,13 +22,10 @@ schema = validate.Schema({
 })
 
 
+@pluginmatcher(url_re)
 class bongacams(Plugin):
-    @classmethod
-    def can_handle_url(self, url):
-        return url_re.match(url)
-
     def _get_streams(self):
-        match = url_re.match(self.url)
+        match = self.match
 
         LISTING_PATH = 'tools/listing_v3.php'
 
@@ -99,5 +96,4 @@ class bongacams(Plugin):
 
 
 __plugin__ = bongacams
-
 

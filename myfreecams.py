@@ -3,9 +3,9 @@ import random
 import re
 import uuid
 
-from streamlink.compat import unquote
+from urllib.parse import unquote
 from streamlink.exceptions import NoStreamsError, PluginError
-from streamlink.plugin import Plugin, PluginArgument, PluginArguments
+from streamlink.plugin import Plugin, PluginArgument, PluginArguments, pluginmatcher
 from streamlink.plugin.api import useragents, validate
 from streamlink.stream import DASHStream, HLSStream
 from streamlink.utils import parse_json
@@ -42,7 +42,7 @@ class MyFreeCams(Plugin):
 
     _data_schema = validate.Schema(
         {
-            'nm': validate.text,
+            'nm': str,
             'sid': int,
             'uid': int,
             'vs': int,
@@ -307,5 +307,5 @@ class MyFreeCams(Plugin):
                                                DASH_VIDEO_URL).items():
                 yield s
 
-
+MyFreeCams = pluginmatcher(MyFreeCams._url_re)(MyFreeCams)
 __plugin__ = MyFreeCams

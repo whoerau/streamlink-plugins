@@ -1,42 +1,40 @@
 import logging
 import re
 
-from streamlink.plugin import Plugin
+from streamlink.exceptions import PluginError
+from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import useragents, validate
-from streamlink.stream import RTMPStream
 from streamlink.utils import parse_json
 
 log = logging.getLogger(__name__)
 
 
+_url_re = re.compile(
+    r'^https?://(?:www\.)?zbiornik\.tv/(?P<channel>[^/]+)/?$')
+
+
+@pluginmatcher(_url_re)
 class Zbiornik(Plugin):
-
     SWF_URL = 'https://zbiornik.tv/wowza.swf'
-
-    _url_re = re.compile(
-        r'^https?://(?:www\.)?zbiornik\.tv/(?P<channel>[^/]+)/?$')
-
+    _url_re = _url_re
     _streams_re = re.compile(r'''var\sstreams\s*=\s*(?P<data>\[.+\]);''')
     _user_re = re.compile(r'''var\suser\s*=\s*(?P<data>\{[^;]+\});''')
 
     _user_schema = validate.Schema({
         'wowzaIam': {
-            'phash': validate.text,
+            'phash': str,
         }
     }, validate.get('wowzaIam'))
 
     _streams_schema = validate.Schema([{
-        'nick': validate.text,
-        'broadcasturl': validate.text,
-        'server': validate.text,
-        'id': validate.text,
+        'nick': str,
+        'broadcasturl': str,
+        'server': str,
+        'id': str,
     }])
 
-    @classmethod
-    def can_handle_url(cls, url):
-        return cls._url_re.match(url) is not None
-
     def _get_streams(self):
+        raise PluginError("RTMP streams are not supported by current Streamlink versions")
         log.debug('Version 2018-07-12')
         log.info('This is a custom plugin. ')
         channel = self._url_re.match(self.url).group('channel')
