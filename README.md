@@ -16,3 +16,15 @@ import cam4
 import camsoda
 import myfreecams
 ```
+
+Run the offline compatibility checks with:
+
+```bash
+python -m unittest -v
+```
+
+Known limitations:
+
+- MyFreeCams supports username URLs; legacy numeric model-ID URLs are no longer resolved.
+- Stripchat's current Mouflon-obfuscated HLS playlists are detected but not playable by Streamlink.
+- ShowUp and Zbiornik use protocols unsupported by current Streamlink versions.

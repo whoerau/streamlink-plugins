@@ -23,7 +23,9 @@ from streamlink.exceptions import (
 from streamlink.plugin import Plugin, PluginArgument, PluginArguments
 from streamlink.plugin.api import useragents
 from streamlink.plugin.plugin import HIGH_PRIORITY, NO_PRIORITY
-from streamlink.stream import HLSStream, HTTPStream, DASHStream
+from streamlink.stream.dash import DASHStream
+from streamlink.stream.hls import HLSStream
+from streamlink.stream.http import HTTPStream
 from streamlink.stream.ffmpegmux import MuxedStream
 from streamlink.utils.args import comma_list, num
 from streamlink.utils.url import update_scheme
@@ -369,7 +371,7 @@ class Generic(Plugin):
         PluginArgument(
             'playlist-max',
             metavar='NUMBER',
-            type=num(int, min=0, max=25),
+            type=num(int, ge=0, le=25),
             default=5,
             help='''
             Number of how many playlist URLs of the same type
