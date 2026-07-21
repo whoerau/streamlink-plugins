@@ -1,93 +1,197 @@
-import logging
-import random
+import json
 import re
-import websocket
+import sys
 
-from streamlink.plugin import Plugin
-from streamlink.plugin.api import validate, utils
-from streamlink.stream import RTMPStream
+from streamlink.plugin import Plugin, pluginmatcher
 
-SWF_URL = 'http://showup.tv/flash/suStreamer.swf'
-RANDOM_UID = '%032x' % random.getrandbits(128)
-JSON_UID = u'{"id":0,"value":["%s",""]}'
-JSON_CHANNEL = u'{"id":2,"value":["%s"]}'
+from browser_stream import ProcessStream
+from curl_cffi import requests
+from curl_cffi.const import CurlWsFlag
 
 _url_re = re.compile(r'https?://(\w+.)?showup\.tv/(?P<channel>[A-Za-z0-9_-]+)')
-_websocket_url_re = re.compile(r'''socket\.connect\(["'](?P<ws>[^"']+)["']\)''')
-_schema = validate.Schema(validate.get('value'))
-
-log = logging.getLogger(__name__)
+_api_url = "https://api.showup.tv/api/next/broadcast/home-list/{category}"
 
 
+@pluginmatcher(_url_re)
 class ShowUp(Plugin):
-    @classmethod
-    def can_handle_url(cls, url):
-        return _url_re.match(url)
-
-    def _get_stream_id(self, channel, ws_url):
-        ws = websocket.WebSocket()
-        ws.connect(ws_url)
-        ws.send(JSON_UID % RANDOM_UID)
-        ws.send(JSON_CHANNEL % channel)
-        # STREAM_ID
-        result = ws.recv()
-        data = utils.parse_json(result, schema=_schema)
-        log.debug('DATA 1 {0}'.format(data))
-        if 'failure' in data:
-            ws.close()
-            return False, False
-
-        # RTMP CDN
-        result_2 = ws.recv()
-        data2 = utils.parse_json(result_2, schema=_schema)
-        log.debug('DATA 2 {0}'.format(data2))
-        if 'failure' in data2:
-            ws.close()
-            return False, False
-
-        # ERROR
-        result_3 = ws.recv()
-        data3 = utils.parse_json(result_3, schema=_schema)
-        log.debug('DATA 3 {0}'.format(data3))
-        if 'failure' in data3:
-            ws.close()
-            return False, False
-
-        return data[0], data2[1]
-
-    def _get_websocket(self, html):
-        ws_url = _websocket_url_re.search(html)
-        if ws_url:
-            ws_host = ws_url.group('ws')
-            if ':' in ws_host:
-                ws_host, ws_port = ws_host.split(':')
-            return 'wss://%s' % ws_host
-
     def _get_streams(self):
-        log.debug('Version 2018-08-19')
-        log.info('This is a custom plugin.')
-        url_match = _url_re.match(self.url)
-        channel = url_match.group('channel')
-        log.debug('Channel name: {0}'.format(channel))
-        self.session.http.parse_headers('Referer: %s' % self.url)
-        self.session.http.parse_cookies('accept_rules=true')
-        page = self.session.http.get(self.url)
-        ws_url = self._get_websocket(page.text)
-        log.debug('WebSocket: {0}'.format(ws_url))
-        stream_id, rtmp_cdn = self._get_stream_id(channel, ws_url)
-        if not (stream_id or rtmp_cdn):
-            log.error('Channel is not available.')
-            return
-        log.debug('Stream ID: {0}'.format(stream_id))
-        log.debug('RTMP CDN: {0}'.format(rtmp_cdn))
-        stream = RTMPStream(self.session, {
-            'rtmp': 'rtmp://{0}:1935/webrtc'.format(rtmp_cdn),
-            'pageUrl': self.url,
-            'playpath': '{0}_aac'.format(stream_id),
-            'swfVfy': SWF_URL,
-            'live': True
+        channel = self.match.group("channel")
+        headers = {
+            "Origin": "https://showup.tv",
+            "Referer": "https://showup.tv/",
+            "X-Accept-Language": "pl",
+        }
+        for category in ("female", "male", "couple", "trans"):
+            response = requests.get(
+                _api_url.format(category=category),
+                params={"create_socket_token": 0, "attach_edge_addresses": 1},
+                headers=headers,
+                impersonate="chrome",
+                timeout=20,
+            )
+            if not response.ok:
+                continue
+            data = response.json()
+            for item in data.get("list", []):
+                username = (item.get("host") or {}).get("username")
+                if item.get("isOnline") and username and username.casefold() == channel.casefold():
+                    alias = (item.get("broadcast") or {}).get("aliasStreamKey")
+                    servers = data.get("streamServers", {}).get("EDGE", [])
+                    hosts = [server["address"] for server in servers if server.get("address")]
+                    if alias and hosts:
+                        try:
+                            variants = _probe_variants(alias, hosts)
+                        except Exception as error:
+                            self.logger.warning("Could not list ShowUp qualities: %s", error)
+                            variants = []
+                        streams = {}
+                        for variant in variants:
+                            info = variant.get("streamInfo") or {}
+                            quality = info.get("label") or (
+                                f"{info['height']}p" if info.get("height") else None
+                            )
+                            stream_key = variant.get("streamKey")
+                            if quality and stream_key:
+                                streams[quality] = ProcessStream(
+                                    self.session, "showup", alias, stream_key, *hosts
+                                )
+                        if streams:
+                            return streams
+                        return {
+                            "live": ProcessStream(
+                                self.session, "showup", alias, alias, *hosts
+                            ),
+                        }
+
+
+def _send(websocket, packet_id, data):
+    websocket.send(
+        json.dumps({"packetId": packet_id, "data": data}),
+        CurlWsFlag.TEXT,
+    )
+
+
+def _connect(hosts):
+    session = requests.Session(impersonate="chrome")
+    error = None
+    for host in hosts:
+        try:
+            return session.ws_connect(
+                f"wss://{host}/storm/v2/live",
+                headers={"Origin": "https://showup.tv"},
+                impersonate="chrome",
+                timeout=20,
+            )
+        except Exception as ex:
+            error = ex
+    raise error or RuntimeError("No ShowUp edge server is available")
+
+
+def _subscribe(websocket, alias):
+    handshake = {
+        "player": {
+            "type": "js",
+            "version": "1.3.0-beta.8",
+            "branch": "Experimental",
+            "protocolVer": 1,
+        },
+        "environment": {
+            "domain": "showup.tv",
+            "userAgent": "Mozilla/5.0",
+            "locale": "pl-PL",
+            "timezone": "Europe/Warsaw",
+            "timezoneOffset": -120,
+        },
+        "capabilities": {
+            "mse": True,
+            "webcodecs": False,
+            "hls": False,
+            "webtransport": False,
+            "sharedArrayBuffer": False,
+            "videoCodecs": ["h264", "h264-high"],
+            "audioCodecs": ["aac", "aac-he"],
+        },
+        "userId": None,
+    }
+    _send(websocket, "clientHandshake", handshake)
+    while True:
+        payload, flags = websocket.recv()
+        if not flags & CurlWsFlag.TEXT:
+            continue
+        packet = json.loads(payload)
+        packet_id = packet.get("packetId")
+        data = packet.get("data") or {}
+        if packet_id == "appInfo":
+            _send(websocket, "appAuthRequest", {"secret": None})
+        elif packet_id == "appAuthResult":
+            if data.get("result") != "success":
+                raise RuntimeError("ShowUp Storm authentication failed")
+            _send(websocket, "subscribeRequest", {"streamKey": alias})
+        elif packet_id == "subscribeResult":
+            if data.get("status") != "success":
+                raise RuntimeError("ShowUp Storm subscription failed")
+            return data.get("streamList") or []
+
+
+def _probe_variants(alias, hosts):
+    websocket = _connect(hosts)
+    try:
+        return _subscribe(websocket, alias)
+    finally:
+        try:
+            websocket.close()
+        except Exception:
+            pass
+
+
+def _capture(alias, selected_key, *hosts):
+    websocket = _connect(hosts)
+    try:
+        variants = _subscribe(websocket, alias)
+        selected = next(
+            (variant for variant in variants if variant.get("streamKey") == selected_key),
+            max(
+                variants,
+                key=lambda item: (
+                    (item.get("streamInfo") or {}).get("height", 0),
+                    (item.get("streamInfo") or {}).get("bitrate", 0),
+                ),
+                default={"streamKey": alias},
+            ),
+        )
+        # Each named Streamlink quality requests its exact Storm stream key.
+        # 每个 Streamlink 画质名称都请求对应的 Storm stream key。
+        _send(websocket, "playRequest", {
+            "streamKey": selected["streamKey"],
+            "subscriptionKey": alias,
+            "packetizer": "mse",
+            "startTime": 0,
         })
-        return {'live': stream}
+        while True:
+            payload, flags = websocket.recv()
+            if flags & CurlWsFlag.BINARY:
+                try:
+                    sys.stdout.buffer.write(payload)
+                    sys.stdout.buffer.flush()
+                except BrokenPipeError:
+                    return
+                continue
+            if flags & CurlWsFlag.TEXT:
+                packet = json.loads(payload)
+                if (
+                    packet.get("packetId") == "playResult"
+                    and (packet.get("data") or {}).get("status") != "success"
+                ):
+                    raise RuntimeError("ShowUp Storm playback failed")
+    finally:
+        try:
+            websocket.close()
+        except Exception:
+            pass
 
 
 __plugin__ = ShowUp
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["--capture"]:
+    _capture(sys.argv[2], sys.argv[3], *sys.argv[4:])

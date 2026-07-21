@@ -1,103 +1,53 @@
-import json
 import re
+from urllib.parse import urljoin
 
-import requests
-
-from urllib.parse import urljoin, urlparse, urlunparse
-from streamlink.exceptions import PluginError, NoStreamsError
-from streamlink.plugin.api import validate, useragents
-from streamlink.plugin import Plugin
-from streamlink.stream import HLSStream
-from streamlink.utils import update_scheme
+from streamlink.plugin import Plugin, pluginmatcher
+from streamlink.plugin.api import useragents, validate
+from streamlink.stream.hls import HLSStream
 
 
-CONST_HEADERS = {}
-CONST_HEADERS['User-Agent'] = useragents.CHROME
-CONST_HEADERS['X-Requested-With'] = 'XMLHttpRequest'
-
-url_re = re.compile(r"(http(s)?://)?(\w{2}.)?(bongacams\d*?\.com)/([\w\d_-]+)")
-
-schema = validate.Schema({
-    "status": "success"
+_url_re = re.compile(
+    r"https?://(?:[\w-]+\.)?(?P<host>bongacams\d*\.(?:com|net))/"
+    r"(?:profile/)?(?P<username>[\w-]+)/?(?:[?#].*)?$"
+)
+_room_schema = validate.Schema({
+    "status": str,
+    validate.optional("localData"): {
+        validate.optional("videoServerUrl"): str,
+    },
+    validate.optional("performerData"): {
+        "username": str,
+        validate.optional("isOnline"): bool,
+        validate.optional("showType"): str,
+    },
 })
 
 
-class bongacams(Plugin):
-    @classmethod
-    def can_handle_url(self, url):
-        return url_re.match(url)
-
+@pluginmatcher(_url_re)
+class BongaCams(Plugin):
     def _get_streams(self):
-        match = url_re.match(self.url)
+        host = self.match.group("host")
+        username = self.match.group("username")
+        response = self.session.http.post(
+            f"https://{host}/tools/amf.php",
+            data=[("method", "getRoomData"), ("args[]", username), ("args[]", "false")],
+            headers={
+                "User-Agent": useragents.CHROME,
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        data = self.session.http.json(response, schema=_room_schema)
+        performer = data.get("performerData") or {}
+        server = (data.get("localData") or {}).get("videoServerUrl")
 
-        LISTING_PATH = 'tools/listing_v3.php'
+        if not server or not performer.get("isOnline") or performer.get("showType") != "public":
+            return
 
-        stream_page_scheme = 'https'
-        stream_page_domain = match.group(4)
-        model_name = match.group(5)
-
-        listing_url = urlunparse((stream_page_scheme, stream_page_domain, LISTING_PATH, '', '', ''))
-
-        # create http session and set headers
-        http_session = self.session.http
-        http_session.headers.update(CONST_HEADERS)
-        
-        params = {
-            "livetab": None,
-            "online_only": True,
-            "offset": 0,
-            "model_search[display_name][text]": model_name,
-            "_online_filter": 0,
-            "can_pin_models": False,
-            "limit": 1
-        }
-
-        response = http_session.get(listing_url, params=params)
-
-        self.logger.debug(response.text)
-
-        if len(http_session.cookies) == 0:
-            raise PluginError("Can't get a cookies")
-        if response.status_code != 200:
-            self.logger.debug("response for {0}:\n{1}".format(response.request.url, response.text))
-            raise PluginError("unexpected status code for {0}: {1}".format(response.url, response.status_code))
-
-        http_session.close()
-        response = response.json()
-        schema.validate(response)
-
-        if not model_name.lower() in list([model['username'].lower() for model in response['models']]):
-            raise NoStreamsError(self.url)
-        if str(response['online_count']) == '0':
-            raise NoStreamsError(self.url)
-
-        esid = None
-        for model in response['models']:
-            if model['username'].lower() == model_name.lower():
-                #if model['room'] not in ('public', 'private', 'fullprivate'):
-                #    raise NoStreamsError(self.url)
-                esid = model.get('esid')
-                model_name = model['username']
-
-        if not esid:
-            raise PluginError("unknown error, esid={0} for {1}.\nResponse: {2}".format(esid, model_name, response['models']))
-
-        hls_url = f'https://{esid}.bcvcdn.com/hls/stream_{model_name}/playlist.m3u8'
-
-        if hls_url:
-            self.logger.debug('HLS URL: {0}'.format(hls_url))
-            try:
-                for s in HLSStream.parse_variant_playlist(self.session, hls_url).items():
-                    yield s
-            except Exception as e:
-                if '404' in str(e):
-                    self.logger.debug(str(e))
-                    self.logger.debug('Stream is currently offline/private/away')
-                else:
-                    self.logger.error(str(e))
-                return
+        # 站点返回 //host；补 HTTPS 后再拼播放列表。 / The API returns //host; normalize it first.
+        server = urljoin("https:", server).rstrip("/")
+        hls_url = f"{server}/hls/stream_{performer['username']}/playlist.m3u8"
+        yield from HLSStream.parse_variant_playlist(self.session, hls_url).items()
 
 
-__plugin__ = bongacams
-
-
+__plugin__ = BongaCams
+bongacams = BongaCams

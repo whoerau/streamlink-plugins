@@ -20,10 +20,12 @@ from streamlink.exceptions import (
     NoPluginError,
     NoStreamsError,
 )
-from streamlink.plugin import Plugin, PluginArgument, PluginArguments
+from streamlink.plugin import Plugin, PluginArgument, PluginArguments, pluginmatcher
 from streamlink.plugin.api import useragents
 from streamlink.plugin.plugin import HIGH_PRIORITY, NO_PRIORITY
-from streamlink.stream import HLSStream, HTTPStream, DASHStream
+from streamlink.stream.dash import DASHStream
+from streamlink.stream.hls import HLSStream
+from streamlink.stream.http import HTTPStream
 from streamlink.stream.ffmpegmux import MuxedStream
 from streamlink.utils.args import comma_list, num
 from streamlink.utils.url import update_scheme
@@ -292,6 +294,8 @@ class GenericCache(object):
     pass
 
 
+@pluginmatcher(re.compile(r'(?:generic|resolve)://(?P<url>.+)'), priority=HIGH_PRIORITY)
+@pluginmatcher(re.compile(r'https?://.+'), priority=NO_PRIORITY)
 class Generic(Plugin):
     pattern_re = re.compile(r'((?:generic|resolve)://)?(?P<url>.+)')
 
@@ -369,7 +373,7 @@ class Generic(Plugin):
         PluginArgument(
             'playlist-max',
             metavar='NUMBER',
-            type=num(int, min=0, max=25),
+            type=num(int, ge=0, le=25),
             default=5,
             help='''
             Number of how many playlist URLs of the same type
@@ -493,10 +497,10 @@ class Generic(Plugin):
         ),
     )
 
-    def __init__(self, url):
-        super(Generic, self).__init__(url)
+    def __init__(self, session, url, options=None):
+        super(Generic, self).__init__(session, url, options)
         self.url = update_scheme(
-            'http://', self.pattern_re.match(self.url).group('url'))
+            'http://', self.pattern_re.match(self.url).group('url'), force=False)
 
         self.html_text = ''
         self.title = None

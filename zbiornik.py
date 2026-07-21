@@ -1,85 +1,142 @@
-import logging
+import asyncio
+import json
 import re
+import sys
 
-from streamlink.plugin import Plugin
-from streamlink.plugin.api import useragents, validate
-from streamlink.stream import RTMPStream
-from streamlink.utils import parse_json
+from streamlink.plugin import Plugin, pluginmatcher
+from streamlink.plugin.api import validate
+from streamlink.utils.parse import parse_json
 
-log = logging.getLogger(__name__)
+from browser_stream import ProcessStream
+from curl_cffi import requests
 
 
+_url_re = re.compile(
+    r'^https?://(?:www\.)?zbiornik\.tv/(?P<channel>[^/]+)/?$')
+
+
+@pluginmatcher(_url_re)
 class Zbiornik(Plugin):
-
-    SWF_URL = 'https://zbiornik.tv/wowza.swf'
-
-    _url_re = re.compile(
-        r'^https?://(?:www\.)?zbiornik\.tv/(?P<channel>[^/]+)/?$')
-
-    _streams_re = re.compile(r'''var\sstreams\s*=\s*(?P<data>\[.+\]);''')
-    _user_re = re.compile(r'''var\suser\s*=\s*(?P<data>\{[^;]+\});''')
-
-    _user_schema = validate.Schema({
-        'wowzaIam': {
-            'phash': validate.text,
-        }
-    }, validate.get('wowzaIam'))
+    _url_re = _url_re
+    _streams_re = re.compile(r'''var\sstreams\s*=\s*(?P<data>\[.+?\]);''', re.S)
 
     _streams_schema = validate.Schema([{
-        'nick': validate.text,
-        'broadcasturl': validate.text,
-        'server': validate.text,
-        'id': validate.text,
+        'nick': str,
+        'broadcasturl': str,
+        'server': str,
+        'id': str,
+        validate.optional('width'): validate.any(int, None),
+        validate.optional('height'): validate.any(int, None),
     }])
 
-    @classmethod
-    def can_handle_url(cls, url):
-        return cls._url_re.match(url) is not None
-
     def _get_streams(self):
-        log.debug('Version 2018-07-12')
-        log.info('This is a custom plugin. ')
         channel = self._url_re.match(self.url).group('channel')
-        log.info('Channel: {0}'.format(channel))
-        self.session.http.headers.update({'User-Agent': useragents.FIREFOX})
-        self.session.http.parse_cookies('adult=1')
-        res = self.session.http.get(self.url)
+        res = requests.get(
+            "https://zbiornik.tv/",
+            cookies={"adult": "1"},
+            impersonate="chrome",
+            timeout=20,
+        )
+        res.raise_for_status()
 
         m = self._streams_re.search(res.text)
         if not m:
-            log.debug('No streams data found.')
-            return
-
-        m2 = self._user_re.search(res.text)
-        if not m:
-            log.debug('No user data found.')
             return
 
         _streams = parse_json(m.group('data'), schema=self._streams_schema)
-        _user = parse_json(m2.group('data'), schema=self._user_schema)
+        for stream in _streams:
+            if stream["nick"].casefold() == channel.casefold():
+                height = stream.get("height")
+                if not height:
+                    try:
+                        metadata = requests.get(
+                            "https://{}/AntMediaZbiornik/rest/v2/broadcasts/{}".format(
+                                stream["server"], stream["broadcasturl"]
+                            ),
+                            impersonate="chrome",
+                            timeout=20,
+                        ).json()
+                        height = metadata.get("height")
+                    except Exception:
+                        height = None
+                quality = f"{height}p" if isinstance(height, int) and height > 0 else "live"
+                # Ant Media has one WebRTC source; expose its measured source height.
+                # Ant Media 只有单一 WebRTC 源，按实测源高度命名。
+                return {
+                    quality: ProcessStream(
+                        self.session,
+                        "zbiornik",
+                        stream["server"],
+                        stream["broadcasturl"],
+                    ),
+                }
 
-        _x = []
-        for _s in _streams:
-            if _s.get('nick') == channel:
-                _x = _s
-                break
 
-        if not _x:
-            log.error('Channel is not available.')
-            return
+async def _capture_webrtc(server, stream_id):
+    import websockets
+    from aiortc import RTCPeerConnection, RTCSessionDescription
+    from aiortc.contrib.media import MediaRecorder
+    from aiortc.sdp import candidate_from_sdp
 
-        app = 'videochat/?{0}'.format(_user['phash'])
-        rtmp = 'rtmp://{0}/videochat/'.format(_x['server'])
+    peer = RTCPeerConnection()
+    recorder = MediaRecorder(
+        sys.stdout.buffer,
+        format="mpegts",
+        options={"mpegts_flags": "resend_headers"},
+    )
+    recorder_started = False
 
-        params = {
-            'rtmp': rtmp,
-            'pageUrl': self.url,
-            'app': app,
-            'playpath': _x['broadcasturl'],
-            'swfVfy': self.SWF_URL,
-            'live': True
-        }
-        return {'live': RTMPStream(self.session, params=params)}
+    @peer.on("track")
+    def on_track(track):
+        recorder.addTrack(track)
+
+    try:
+        async with websockets.connect(
+            f"wss://{server}/AntMediaZbiornik/websocket",
+            origin="https://zbiornik.tv",
+            user_agent_header="Mozilla/5.0",
+            open_timeout=20,
+        ) as websocket:
+            await websocket.send(json.dumps({
+                "command": "play",
+                "streamId": stream_id,
+                "token": "",
+                "subscriberId": "",
+                "subscriberCode": "",
+                "viewerInfo": "streamlink",
+            }))
+
+            async for raw_message in websocket:
+                message = json.loads(raw_message)
+                if message.get("command") == "takeConfiguration" and message.get("type") == "offer":
+                    await peer.setRemoteDescription(RTCSessionDescription(
+                        sdp=message["sdp"],
+                        type="offer",
+                    ))
+                    answer = await peer.createAnswer()
+                    await peer.setLocalDescription(answer)
+                    await websocket.send(json.dumps({
+                        "command": "takeConfiguration",
+                        "streamId": stream_id,
+                        "type": "answer",
+                        "sdp": peer.localDescription.sdp,
+                    }))
+                elif message.get("command") == "takeCandidate":
+                    candidate = candidate_from_sdp(message["candidate"].split(":", 1)[-1])
+                    candidate.sdpMid = message.get("id")
+                    candidate.sdpMLineIndex = message.get("label")
+                    await peer.addIceCandidate(candidate)
+                elif message.get("definition") == "play_started" and not recorder_started:
+                    await recorder.start()
+                    recorder_started = True
+    finally:
+        if recorder_started:
+            await recorder.stop()
+        await peer.close()
 
 
 __plugin__ = Zbiornik
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["--capture"]:
+    asyncio.run(_capture_webrtc(sys.argv[2], sys.argv[3]))

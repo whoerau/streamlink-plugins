@@ -1,9 +1,9 @@
 import re
 import uuid
 
-from streamlink.plugin import Plugin
+from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
-from streamlink.stream import HLSStream
+from streamlink.stream.hls import HLSStream
 
 API_HLS = "https://chaturbate.com/get_edge_hls_url_ajax/"
 
@@ -11,20 +11,17 @@ _url_re = re.compile(r"https?://(\w+\.)?chaturbate\.com/(?P<username>\w+)")
 
 _post_schema = validate.Schema(
     {
-        "url": validate.text,
-        "room_status": validate.text,
-        "success": int
+        "url": validate.any(None, str),
+        "room_status": str,
+        "success": validate.any(bool, int),
     }
 )
 
 
+@pluginmatcher(_url_re)
 class Chaturbate(Plugin):
-    @classmethod
-    def can_handle_url(cls, url):
-        return _url_re.match(url)
-
     def _get_streams(self):
-        match = _url_re.match(self.url)
+        match = self.match
         username = match.group("username")
 
         CSRFToken = str(uuid.uuid4().hex.upper()[0:32])
@@ -52,5 +49,3 @@ class Chaturbate(Plugin):
 
 
 __plugin__ = Chaturbate
-
-
