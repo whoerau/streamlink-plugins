@@ -9,6 +9,7 @@ description = "Third-party Streamlink plugins packaged for pip installation."
 requires-python = ">=3.10"
 dependencies = [
     "aiortc>=1.13.0",
+    "cryptography>=50.0.0",
     "curl-cffi>=0.12.0",
     "requests",
     "scrapling[fetchers]>=0.4.9",
